@@ -28,6 +28,14 @@ class ImageCard(QWidget):
         # Do not allow the card to expand vertically; keep a tight size hint
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
+        self._layout = layout  # keep reference for fast padding updates
+        self._image_path = image_path
+        self._image_size = image_size
+
+    def set_internal_padding(self, padding: int):
+        """Update internal margins without recreating the widget."""
+        self._layout.setContentsMargins(padding, padding, padding, padding)
+
     def _get_scalled_pixmap(self, pixmap : QPixmap, size : QSize) -> QPixmap:
         # Scale and crop the pixmap to be square
         scaled_pixmap = pixmap.scaled(size.width(), size.height(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
@@ -45,6 +53,7 @@ class ImageGridWidget(QWidget):
         self._padding_input = padding  # store original user value
         self.gap = 0
         self.card_inner_padding = 0
+        self._cards: list[ImageCard] = []  # cache of ImageCard widgets for reuse
 
         # TODO: make image directory configurable / injectable
         self.image_paths = self._get_images("C:\\Users\\parne\\Pictures\\Screenshots")
@@ -64,7 +73,7 @@ class ImageGridWidget(QWidget):
 
         # Initial column calculation based on current widget width (gap computed above)
         self._images_per_row = self.get_images_per_row(self.image_size, self.gap)
-        self._build_grid()
+        self._build_grid(reuse=True)
 
     # --- Padding / gap logic ------------------------------------------
     def _apply_padding(self, padding: float):
@@ -110,32 +119,60 @@ class ImageGridWidget(QWidget):
         self._apply_padding(padding)
         # Recompute columns because effective width per image changed
         self._images_per_row = self.get_images_per_row(self.image_size, self.gap)
-        self._build_grid()
+        self._build_grid(reuse=True)
 
-    def _build_grid(self):
-        # Clear existing items
+    def _build_grid(self, reuse: bool = False):
+        """(Re)build the grid layout.
+
+        If reuse=True, we DO NOT destroy and recreate ImageCard widgets; instead we:
+          * Ensure we have enough cached cards (create only missing ones)
+          * Update internal padding on existing cards
+          * Reposition them in the layout
+
+        This drastically lowers churn during window resizes where only geometry changes.
+        """
+        # Remove all layout items but don't delete widgets if reuse requested
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
+            # Don't delete the widget if reuse; just detach it
+            if not reuse:
+                w = item.widget()
+                if w:
+                    w.deleteLater()
 
         if not self.image_paths:
             return
 
+        # Ensure card cache large enough
+        if reuse:
+            if len(self._cards) < len(self.image_paths):
+                for i in range(len(self._cards), len(self.image_paths)):
+                    self._cards.append(ImageCard(self.image_paths[i], self.image_size, padding=self.card_inner_padding))
+            # Update internal padding on all cached cards (cheap)
+            for card in self._cards:
+                card.set_internal_padding(self.card_inner_padding)
+        else:
+            # Fresh construction path
+            self._cards = [ImageCard(p, self.image_size, padding=self.card_inner_padding) for p in self.image_paths]
+
         cols = max(1, self._images_per_row)
         last_row = 0
-        for idx, image_path in enumerate(self.image_paths):
+        for idx, card in enumerate(self._cards):
+            if idx >= len(self.image_paths):
+                break
             row = idx // cols
             col = idx % cols
             last_row = row
-            image_card = ImageCard(image_path, self.image_size, padding=self.card_inner_padding)
-            self.grid_layout.addWidget(image_card, row, col, alignment=Qt.AlignTop)
+            self.grid_layout.addWidget(card, row, col, alignment=Qt.AlignTop)
+
+        # Hide any extra cached cards (if image list shrank) without deleting; future reuse possible
+        for extra in self._cards[len(self.image_paths):]:
+            extra.setParent(None)
+            extra.hide()
 
         # Precisely set our own height to content height to avoid extra blank scroll space.
         rows = last_row + 1
-        card_h = self.image_size.height() + 2 * self.card_inner_padding  # image label + internal card padding
-        # grid vertical spacing occurs between rows only (rows-1 gaps)
+        card_h = self.image_size.height() + 2 * self.card_inner_padding
         total_height = (rows * card_h) + max(0, rows - 1) * self.grid_layout.verticalSpacing() + self.grid_layout.contentsMargins().top() + self.grid_layout.contentsMargins().bottom()
         self.setFixedHeight(total_height)
 
@@ -178,7 +215,7 @@ class ImageGridWidget(QWidget):
         new_cols = self.get_images_per_row(self.image_size, self.gap, available_width=size.width())
         if new_cols != self._images_per_row:
             self._images_per_row = new_cols
-            self._build_grid()
+            self._build_grid(reuse=True)
 
     def resizeEvent(self, event):  # noqa: N802 (Qt naming)
         """Recalculate columns on every resize.
@@ -192,7 +229,7 @@ class ImageGridWidget(QWidget):
         new_cols = self.get_images_per_row(self.image_size, self.gap)
         if new_cols != self._images_per_row:
             self._images_per_row = new_cols
-            self._build_grid()
+            self._build_grid(reuse=True)
         return super().resizeEvent(event)
 
     # --- Size hints -----------------------------------------------------
