@@ -8,8 +8,9 @@ from PySide6.QtCore import Qt, QSize
 import os
 
 class ImageCard(QWidget):
-    def __init__(self, image_path: str, image_size: QSize = QSize(200,200), padding: int = 10):
+    def __init__(self, image_path: str, image_size: QSize = QSize(200,200), padding: int = 0.01):
         super().__init__()
+    
         layout = QVBoxLayout()
         layout.setContentsMargins(padding, padding, padding, padding)
         layout.setSpacing(0)
@@ -37,26 +38,79 @@ class ImageCard(QWidget):
         return cropped_pixmap
 
 class ImageGridWidget(QWidget):
-    def __init__(self, image_size: QSize = QSize(200,200), padding: int = 10):
+    def __init__(self, image_size: QSize = QSize(200,200), padding: float = 0.01):
         super().__init__()
         self.image_size = image_size
-        self.padding = padding
         self._images_per_row = 1
+        self._padding_input = padding  # store original user value
+        self.gap = 0
+        self.card_inner_padding = 0
+
         # TODO: make image directory configurable / injectable
-        self.image_paths = self._get_images("C:\\Users\\parne\\Pictures\\Screenshots")  # Replace with your image directory
+        self.image_paths = self._get_images("C:\\Users\\parne\\Pictures\\Screenshots")
 
+        # --- Layout construction order matters so we can apply flush margins everywhere ---
         self.grid_layout = QGridLayout()
-        self.grid_layout.setHorizontalSpacing(padding)
-        self.grid_layout.setVerticalSpacing(padding)
-        self.grid_layout.setContentsMargins(padding, padding, padding, padding)
-        self.grid_layout.setAlignment(Qt.AlignTop)
+        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
 
-        # Initial column calculation based on current widget width
-        self._images_per_row = self.get_images_per_row(self.image_size, self.padding)
-        self._build_grid()
-        self.setLayout(self.grid_layout)
-        # Expand horizontally, but keep vertical size to minimum needed (scroll area scrolls instead of stretching rows)
+        main_layout = QHBoxLayout()
+        main_layout.addLayout(self.grid_layout)
+        main_layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.setLayout(main_layout)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        # Apply initial padding AFTER parent layout exists so flush mode can zero its margins too
+        self._apply_padding(self._padding_input)
+
+        # Initial column calculation based on current widget width (gap computed above)
+        self._images_per_row = self.get_images_per_row(self.image_size, self.gap)
+        self._build_grid()
+
+    # --- Padding / gap logic ------------------------------------------
+    def _apply_padding(self, padding: float):
+        """Interpret user padding value and update layout metrics.
+
+        Rules:
+          padding == 0 -> flush mode (images touch): gap=0, margins=0, inner=0
+          0 < padding < 1 -> fraction of image width (at least 1px)
+          padding >= 1 -> absolute pixels
+        """
+        self._padding_input = padding
+        if padding == 0:
+            gap = 0
+        elif 0 < padding < 1:
+            gap = max(1, int(self.image_size.width() * padding))
+        else:
+            gap = int(padding)
+
+        self.gap = gap
+        # Inner padding only when we have a visibly larger gap (avoid double spacing)
+        self.card_inner_padding = 0 if gap <= 4 else max(1, gap // 4)
+        parent_layout = self.layout()
+
+        if gap == 0:
+            # STRICT FLUSH MODE: remove every spacing/margin source
+            self.grid_layout.setHorizontalSpacing(0)
+            self.grid_layout.setVerticalSpacing(0)
+            self.grid_layout.setContentsMargins(0, 0, 0, 0)
+            if parent_layout is not None:
+                parent_layout.setSpacing(0)
+                parent_layout.setContentsMargins(0, 0, 0, 0)
+        else:
+            self.grid_layout.setHorizontalSpacing(gap)
+            self.grid_layout.setVerticalSpacing(gap)
+            self.grid_layout.setContentsMargins(gap, gap, gap, gap)
+            if parent_layout is not None:
+                # Mirror outer margins so centering remains visually balanced
+                parent_layout.setSpacing(gap)
+                parent_layout.setContentsMargins(gap, gap, gap, gap)
+
+    def set_padding(self, padding: float):
+        """Public method to change padding at runtime."""
+        self._apply_padding(padding)
+        # Recompute columns because effective width per image changed
+        self._images_per_row = self.get_images_per_row(self.image_size, self.gap)
+        self._build_grid()
 
     def _build_grid(self):
         # Clear existing items
@@ -75,12 +129,12 @@ class ImageGridWidget(QWidget):
             row = idx // cols
             col = idx % cols
             last_row = row
-            image_card = ImageCard(image_path, self.image_size, self.padding)
+            image_card = ImageCard(image_path, self.image_size, padding=self.card_inner_padding)
             self.grid_layout.addWidget(image_card, row, col, alignment=Qt.AlignTop)
 
         # Precisely set our own height to content height to avoid extra blank scroll space.
         rows = last_row + 1
-        card_h = self.image_size.height() + 2 * self.padding  # image label + top/bottom padding inside card
+        card_h = self.image_size.height() + 2 * self.card_inner_padding  # image label + internal card padding
         # grid vertical spacing occurs between rows only (rows-1 gaps)
         total_height = (rows * card_h) + max(0, rows - 1) * self.grid_layout.verticalSpacing() + self.grid_layout.contentsMargins().top() + self.grid_layout.contentsMargins().bottom()
         self.setFixedHeight(total_height)
@@ -103,15 +157,17 @@ class ImageGridWidget(QWidget):
         # Always use the CURRENT width of the widget unless an override is supplied
         window_width = self.width() if available_width is None else available_width
         image_width = image_size.width()
-
-        total_h_image_space = image_width + 2 * padding_h
-
+        # Each image cell occupies its width plus exactly ONE gap to its right except last column.
+        # For fitting calculation we treat each image as (image_width + gap). When gap=0 (flush) this collapses.
+        total_h_image_space = image_width + padding_h
         if not image_width or not window_width or total_h_image_space <= 0:
             return 1
-        
-        # Each image takes up image_width + 2 * padding_h horizontally
         images_per_row = max(1, window_width // total_h_image_space)
         return images_per_row
+
+    # Convenience helper (not strictly required but useful for debugging / clarity)
+    def is_flush(self) -> bool:
+        return self.gap == 0
 
     def on_window_resize(self, size : QSize):
         """Backward compatible hook if an external container forwards resize events.
@@ -119,7 +175,7 @@ class ImageGridWidget(QWidget):
         Directly performs the same recalculation logic as the native resizeEvent without
         trying to fabricate a QResizeEvent (which caused a TypeError previously).
         """
-        new_cols = self.get_images_per_row(self.image_size, self.padding, available_width=size.width())
+        new_cols = self.get_images_per_row(self.image_size, self.gap, available_width=size.width())
         if new_cols != self._images_per_row:
             self._images_per_row = new_cols
             self._build_grid()
@@ -133,7 +189,7 @@ class ImageGridWidget(QWidget):
         (scale images smaller than the nominal size when space is tight) or place this
         widget inside a QScrollArea.
         """
-        new_cols = self.get_images_per_row(self.image_size, self.padding)
+        new_cols = self.get_images_per_row(self.image_size, self.gap)
         if new_cols != self._images_per_row:
             self._images_per_row = new_cols
             self._build_grid()
@@ -142,15 +198,15 @@ class ImageGridWidget(QWidget):
     # --- Size hints -----------------------------------------------------
     def minimumSizeHint(self) -> QSize:  # noqa: D401
         """Return the minimum size: one image card including padding."""
-        return QSize(self.image_size.width() + 2 * self.padding,
-                     self.image_size.height() + 2 * self.padding)
+        return QSize(self.image_size.width() + 2 * self.card_inner_padding,
+        self.image_size.height() + 2 * self.card_inner_padding)
 
     def sizeHint(self) -> QSize:  # optional, gives a nicer initial size
         cols = max(1, self._images_per_row)
         rows = max(1, (len(self.image_paths) + cols - 1) // cols)
         return QSize(
-            cols * (self.image_size.width() + 2 * self.padding),
-            rows * (self.image_size.height() + 2 * self.padding)
+            cols * (self.image_size.width() + self.gap),
+            rows * (self.image_size.height() + self.gap)
         )
 
 
