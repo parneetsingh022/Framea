@@ -7,8 +7,10 @@ from PySide6.QtGui import QPixmap, QCursor
 from PySide6.QtCore import Qt, QSize
 import os
 
+
+
 class ImageCard(QWidget):
-    def __init__(self, image_path: str, image_size: QSize = QSize(200,200), padding: int = 0.01):
+    def __init__(self, image_path: str, image_size: QSize, padding: int):
         super().__init__()
     
         layout = QVBoxLayout()
@@ -46,7 +48,7 @@ class ImageCard(QWidget):
         return cropped_pixmap
 
 class ImageGridWidget(QWidget):
-    def __init__(self, image_size: QSize = QSize(200,200), padding: float = 0.01):
+    def __init__(self, image_size: QSize, padding: float):
         super().__init__()
         self.image_size = image_size
         self._images_per_row = 1
@@ -253,7 +255,7 @@ class ImageGridScrollArea(QScrollArea):
     Use this in your main window instead of placing ImageGridWidget directly
     if you want vertical scrolling when there are many images.
     """
-    def __init__(self, image_size: QSize = QSize(200,200), padding: int = 10, parent=None):
+    def __init__(self, image_size: QSize = QSize(200,200), padding: int = 0.01, parent=None):
         super().__init__(parent)
         # We'll manage width manually so vertical scroll works predictably
         self.setWidgetResizable(False)
