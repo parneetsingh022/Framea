@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton
 )
 from PySide6.QtCore import Qt
-from widgets.image_grid_widget import ImageGridWidget
+from widgets.image_grid_widget import ImageGridScrollArea
 from PySide6.QtGui import QResizeEvent
 
 
@@ -15,15 +15,14 @@ class MainWindow(QMainWindow):
 
         central_widget = QWidget()
         layout = QVBoxLayout(central_widget)
-
-        self.image_grid_widget = ImageGridWidget()
-        layout.addWidget(self.image_grid_widget)
-
+        self.image_grid_scroll = ImageGridScrollArea()
+        layout.addWidget(self.image_grid_scroll)
         self.setCentralWidget(central_widget)
 
     def resizeEvent(self, event: QResizeEvent):
         new_size = event.size()
-        self.image_grid_widget.on_window_resize(new_size)
+        # Forward size to inner grid through scroll area
+        self.image_grid_scroll.grid.on_window_resize(new_size)
         super().resizeEvent(event)
 
 
